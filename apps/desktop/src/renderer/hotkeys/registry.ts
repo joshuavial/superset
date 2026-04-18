@@ -586,7 +586,7 @@ export const HOTKEYS_REGISTRY = {
 	},
 	SHOW_HOTKEYS: {
 		key: {
-			mac: "meta+slash",
+			mac: "meta+shift+slash",
 			windows: "ctrl+shift+slash",
 			linux: "ctrl+shift+slash",
 		},
