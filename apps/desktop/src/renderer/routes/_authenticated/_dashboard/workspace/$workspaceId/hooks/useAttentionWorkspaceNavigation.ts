@@ -1,3 +1,4 @@
+import { findNeighborInSet } from "@superset/shared/workspace-launch";
 import type { UseNavigateResult } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import { useHotkey } from "renderer/hotkeys";
@@ -10,7 +11,6 @@ import { useTabsStore } from "renderer/stores/tabs/store";
 import type { Tab } from "renderer/stores/tabs/types";
 import { extractPaneIdsFromLayout } from "renderer/stores/tabs/utils";
 import { getHighestPriorityStatus, type Pane } from "shared/tabs-types";
-import { findNeighborInSet } from "shared/utils/neighbor-in-set";
 
 type GroupedWorkspaces = ElectronRouterOutputs["workspaces"]["getAllGrouped"];
 

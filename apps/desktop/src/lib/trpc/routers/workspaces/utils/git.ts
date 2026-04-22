@@ -4,12 +4,12 @@ import { mkdir, rename } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { BranchPrefixMode } from "@superset/local-db";
-import friendlyWords from "friendly-words";
 import {
 	sanitizeAuthorPrefix,
 	sanitizeBranchName,
 	sanitizeBranchNameWithMaxLength,
-} from "shared/utils/branch";
+} from "@superset/shared/workspace-launch";
+import friendlyWords from "friendly-words";
 import type { StatusResult } from "simple-git";
 import { runWithPostCheckoutHookTolerance } from "../../utils/git-hook-tolerance";
 import { execGitWithShellPath, getSimpleGitWithShellPath } from "./git-client";
@@ -1791,7 +1791,8 @@ export async function createWorktreeFromPr({
 				{ cwd: worktreePath, timeout: 120_000 },
 			);
 		} catch (ghError) {
-			const ghMsg = ghError instanceof Error ? ghError.message : String(ghError);
+			const ghMsg =
+				ghError instanceof Error ? ghError.message : String(ghError);
 			// `gh pr checkout` can fail with "is not a branch" when the branch name
 			// contains '/' (e.g. "user/feature-branch"). Git has trouble resolving
 			// "origin/user/feature-branch" as a tracking ref inside a worktree.
