@@ -1,7 +1,24 @@
-import { auth } from "@superset/auth/server";
-import { toNextJsHandler } from "better-auth/next-js";
+function shouldSkipAuthHandlers(): boolean {
+	return Boolean(process.env.SKIP_ENV_VALIDATION && !process.env.DATABASE_URL);
+}
 
-const { GET: _GET, POST: _POST } = toNextJsHandler(auth);
+function authUnavailableResponse(): Response {
+	return Response.json(
+		{
+			error: "Auth is unavailable because DATABASE_URL is not configured.",
+		},
+		{ status: 503 },
+	);
+}
+
+async function getAuthHandlers() {
+	const [{ auth }, { toNextJsHandler }] = await Promise.all([
+		import("@superset/auth/server"),
+		import("better-auth/next-js"),
+	]);
+
+	return toNextJsHandler(auth);
+}
 
 /**
  * Normalize localhost variants in a URL so that `localhost` and `127.0.0.1`
@@ -14,6 +31,11 @@ function normalizeLocalhostUri(uri: string): string {
 }
 
 const GET = async (req: Request) => {
+	if (shouldSkipAuthHandlers()) {
+		return authUnavailableResponse();
+	}
+
+	const { GET: _GET } = await getAuthHandlers();
 	const url = new URL(req.url);
 	if (url.pathname.endsWith("/oauth2/authorize")) {
 		const redirectUri = url.searchParams.get("redirect_uri");
@@ -29,6 +51,11 @@ const GET = async (req: Request) => {
 };
 
 const POST = async (req: Request) => {
+	if (shouldSkipAuthHandlers()) {
+		return authUnavailableResponse();
+	}
+
+	const { POST: _POST } = await getAuthHandlers();
 	const url = new URL(req.url);
 	if (url.pathname.endsWith("/oauth2/register")) {
 		const cloned = req.clone();

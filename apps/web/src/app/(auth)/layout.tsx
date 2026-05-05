@@ -1,21 +1,27 @@
-import { auth } from "@superset/auth/server";
 import { headers } from "next/headers";
 import Image from "next/image";
 import { redirect } from "next/navigation";
 
 import { env } from "@/env";
 
+function shouldSkipAuthSessionLookup(): boolean {
+	return Boolean(process.env.SKIP_ENV_VALIDATION && !process.env.DATABASE_URL);
+}
+
 export default async function AuthLayout({
 	children,
 }: {
 	children: React.ReactNode;
 }) {
-	const session = await auth.api.getSession({
-		headers: await headers(),
-	});
+	if (!shouldSkipAuthSessionLookup()) {
+		const { auth } = await import("@superset/auth/server");
+		const session = await auth.api.getSession({
+			headers: await headers(),
+		});
 
-	if (session) {
-		redirect("/");
+		if (session) {
+			redirect("/");
+		}
 	}
 
 	return (

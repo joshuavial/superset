@@ -1,4 +1,3 @@
-import { auth } from "@superset/auth/server";
 import { headers } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -14,12 +13,25 @@ function isPublicRoute(pathname: string): boolean {
 	return publicRoutes.some((route) => pathname.startsWith(route));
 }
 
+function shouldSkipAuthSessionLookup(): boolean {
+	return Boolean(process.env.SKIP_ENV_VALIDATION && !process.env.DATABASE_URL);
+}
+
 export default async function proxy(req: NextRequest) {
+	const pathname = req.nextUrl.pathname;
+
+	if (shouldSkipAuthSessionLookup()) {
+		if (!isPublicRoute(pathname)) {
+			return NextResponse.redirect(new URL("/sign-in", req.url));
+		}
+
+		return NextResponse.next();
+	}
+
+	const { auth } = await import("@superset/auth/server");
 	const session = await auth.api.getSession({
 		headers: await headers(),
 	});
-
-	const pathname = req.nextUrl.pathname;
 
 	if (
 		session &&

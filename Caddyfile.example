@@ -3,13 +3,13 @@
 #
 # Copy to Caddyfile:  cp Caddyfile.example Caddyfile
 # Install caddy:      brew install caddy  (macOS) / see https://caddyserver.com/docs/install
-
 {
 	auto_https disable_redirects
+	skip_install_trust
 }
 
-https://localhost:3010 {
-	reverse_proxy localhost:3001 {
+https://localhost:{$CADDY_ELECTRIC_PORT:3030} {
+	reverse_proxy localhost:{$WRANGLER_PORT:3033} {
 		flush_interval -1
 	}
 }

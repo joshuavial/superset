@@ -3,10 +3,10 @@
 	"version": "1.0.0",
 	"main": "expo-router/entry",
 	"scripts": {
-		"dev": "EXPO_UNSTABLE_MCP_SERVER=1 expo start",
+		"dev": "dotenv -e ../../.env -- sh -c 'EXPO_UNSTABLE_MCP_SERVER=1 expo start --port ${EXPO_PORT:-3035}'",
 		"android": "expo run:android",
 		"ios": "expo run:ios",
-		"web": "expo start --web",
+		"web": "dotenv -e ../../.env -- sh -c 'expo start --web --port ${EXPO_WEB_PORT:-3036}'",
 		"typecheck": "tsc --noEmit",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write ."
