@@ -68,8 +68,11 @@ export const workspaceTypeValues = ["local", "cloud"] as const;
 export const workspaceTypeEnum = z.enum(workspaceTypeValues);
 export type WorkspaceType = z.infer<typeof workspaceTypeEnum>;
 
+export const v2WorkspaceTypeValues = ["main", "worktree"] as const;
+export const v2WorkspaceTypeEnum = z.enum(v2WorkspaceTypeValues);
+export type V2WorkspaceType = z.infer<typeof v2WorkspaceTypeEnum>;
+
 export const automationRunStatusValues = [
-	"pending",
 	"dispatching",
 	"dispatched",
 	"skipped_offline",
@@ -81,3 +84,11 @@ export type AutomationRunStatus = z.infer<typeof automationRunStatusEnum>;
 export const automationSessionKindValues = ["chat", "terminal"] as const;
 export const automationSessionKindEnum = z.enum(automationSessionKindValues);
 export type AutomationSessionKind = z.infer<typeof automationSessionKindEnum>;
+
+export const automationPromptSourceValues = [
+	"human",
+	"agent",
+	"restore",
+] as const;
+export const automationPromptSourceEnum = z.enum(automationPromptSourceValues);
+export type AutomationPromptSource = z.infer<typeof automationPromptSourceEnum>;

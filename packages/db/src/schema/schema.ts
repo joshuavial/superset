@@ -2,11 +2,13 @@ import type { ResolvedAgentConfig } from "@superset/shared/agent-settings";
 import { sql } from "drizzle-orm";
 import {
 	boolean,
+	foreignKey,
 	index,
 	integer,
 	jsonb,
 	pgEnum,
 	pgTable,
+	primaryKey,
 	real,
 	text,
 	timestamp,
@@ -16,6 +18,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { organizations, users } from "./auth";
 import {
+	automationPromptSourceValues,
 	automationRunStatusValues,
 	automationSessionKindValues,
 	commandStatusValues,
@@ -25,6 +28,7 @@ import {
 	taskStatusEnumValues,
 	v2ClientTypeValues,
 	v2UsersHostRoleValues,
+	v2WorkspaceTypeValues,
 	workspaceTypeValues,
 } from "./enums";
 import { githubRepositories } from "./github";
@@ -43,6 +47,10 @@ export const v2ClientType = pgEnum("v2_client_type", v2ClientTypeValues);
 export const v2UsersHostRole = pgEnum(
 	"v2_users_host_role",
 	v2UsersHostRoleValues,
+);
+export const v2WorkspaceType = pgEnum(
+	"v2_workspace_type",
+	v2WorkspaceTypeValues,
 );
 
 export const taskStatuses = pgTable(
@@ -181,6 +189,9 @@ export const integrationConnections = pgTable(
 		refreshToken: text("refresh_token"),
 		tokenExpiresAt: timestamp("token_expires_at"),
 
+		disconnectedAt: timestamp("disconnected_at"),
+		disconnectReason: text("disconnect_reason"),
+
 		externalOrgId: text("external_org_id"),
 		externalOrgName: text("external_org_name"),
 
@@ -227,6 +238,8 @@ export const subscriptions = pgTable(
 		canceledAt: timestamp("canceled_at"),
 		endedAt: timestamp("ended_at"),
 		seats: integer(),
+		billingInterval: text("billing_interval"),
+		stripeScheduleId: text("stripe_schedule_id"),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at")
 			.notNull()
@@ -243,7 +256,9 @@ export const subscriptions = pgTable(
 export type InsertSubscription = typeof subscriptions.$inferInsert;
 export type SelectSubscription = typeof subscriptions.$inferSelect;
 
-// Device presence - tracks online devices for command routing
+// Device presence — v1 concept. Tracks per-(user, machine) presence for
+// MCP ownership verification. Untouched by the v2 host consolidation; will
+// be retired when v1 is removed.
 export const devicePresence = pgTable(
 	"device_presence",
 	{
@@ -394,6 +409,7 @@ export const v2Projects = pgTable(
 			() => githubRepositories.id,
 			{ onDelete: "set null" },
 		),
+		iconUrl: text("icon_url"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -405,12 +421,6 @@ export const v2Projects = pgTable(
 	(table) => [
 		index("v2_projects_organization_id_idx").on(table.organizationId),
 		unique("v2_projects_org_slug_unique").on(table.organizationId, table.slug),
-		// One project per repo URL per org. NULLs don't collide (PG default)
-		// so empty-mode projects without a remote can still be created.
-		uniqueIndex("v2_projects_org_repo_clone_url_unique").on(
-			table.organizationId,
-			sql`lower(${table.repoCloneUrl})`,
-		),
 	],
 );
 
@@ -420,7 +430,6 @@ export type SelectV2Project = typeof v2Projects.$inferSelect;
 export const v2Hosts = pgTable(
 	"v2_hosts",
 	{
-		id: uuid().primaryKey().defaultRandom(),
 		organizationId: uuid("organization_id")
 			.notNull()
 			.references(() => organizations.id, { onDelete: "cascade" }),
@@ -439,11 +448,8 @@ export const v2Hosts = pgTable(
 			.$onUpdate(() => new Date()),
 	},
 	(table) => [
+		primaryKey({ columns: [table.organizationId, table.machineId] }),
 		index("v2_hosts_organization_id_idx").on(table.organizationId),
-		unique("v2_hosts_org_machine_id_unique").on(
-			table.organizationId,
-			table.machineId,
-		),
 	],
 );
 
@@ -453,7 +459,6 @@ export type SelectV2Host = typeof v2Hosts.$inferSelect;
 export const v2Clients = pgTable(
 	"v2_clients",
 	{
-		id: uuid().primaryKey().defaultRandom(),
 		organizationId: uuid("organization_id")
 			.notNull()
 			.references(() => organizations.id, { onDelete: "cascade" }),
@@ -471,13 +476,11 @@ export const v2Clients = pgTable(
 			.$onUpdate(() => new Date()),
 	},
 	(table) => [
+		primaryKey({
+			columns: [table.organizationId, table.userId, table.machineId],
+		}),
 		index("v2_clients_organization_id_idx").on(table.organizationId),
 		index("v2_clients_user_id_idx").on(table.userId),
-		unique("v2_clients_org_user_machine_unique").on(
-			table.organizationId,
-			table.userId,
-			table.machineId,
-		),
 	],
 );
 
@@ -487,16 +490,13 @@ export type SelectV2Client = typeof v2Clients.$inferSelect;
 export const v2UsersHosts = pgTable(
 	"v2_users_hosts",
 	{
-		id: uuid().primaryKey().defaultRandom(),
 		organizationId: uuid("organization_id")
 			.notNull()
 			.references(() => organizations.id, { onDelete: "cascade" }),
 		userId: uuid("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
-		hostId: uuid("host_id")
-			.notNull()
-			.references(() => v2Hosts.id, { onDelete: "cascade" }),
+		hostId: text("host_id").notNull(),
 		role: v2UsersHostRole().notNull().default("member"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
@@ -507,14 +507,17 @@ export const v2UsersHosts = pgTable(
 			.$onUpdate(() => new Date()),
 	},
 	(table) => [
+		primaryKey({
+			columns: [table.organizationId, table.userId, table.hostId],
+		}),
+		foreignKey({
+			columns: [table.organizationId, table.hostId],
+			foreignColumns: [v2Hosts.organizationId, v2Hosts.machineId],
+			name: "v2_users_hosts_host_fk",
+		}).onDelete("cascade"),
 		index("v2_users_hosts_organization_id_idx").on(table.organizationId),
 		index("v2_users_hosts_user_id_idx").on(table.userId),
 		index("v2_users_hosts_host_id_idx").on(table.hostId),
-		unique("v2_users_hosts_org_user_host_unique").on(
-			table.organizationId,
-			table.userId,
-			table.hostId,
-		),
 	],
 );
 
@@ -531,12 +534,14 @@ export const v2Workspaces = pgTable(
 		projectId: uuid("project_id")
 			.notNull()
 			.references(() => v2Projects.id, { onDelete: "cascade" }),
-		hostId: uuid("host_id")
-			.notNull()
-			.references(() => v2Hosts.id),
+		hostId: text("host_id").notNull(),
 		name: text().notNull(),
 		branch: text().notNull(),
+		type: v2WorkspaceType().notNull().default("worktree"),
 		createdByUserId: uuid("created_by_user_id").references(() => users.id, {
+			onDelete: "set null",
+		}),
+		taskId: uuid("task_id").references(() => tasks.id, {
 			onDelete: "set null",
 		}),
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -548,9 +553,18 @@ export const v2Workspaces = pgTable(
 			.$onUpdate(() => new Date()),
 	},
 	(table) => [
+		foreignKey({
+			columns: [table.organizationId, table.hostId],
+			foreignColumns: [v2Hosts.organizationId, v2Hosts.machineId],
+			name: "v2_workspaces_host_fk",
+		}),
 		index("v2_workspaces_project_id_idx").on(table.projectId),
 		index("v2_workspaces_organization_id_idx").on(table.organizationId),
 		index("v2_workspaces_host_id_idx").on(table.hostId),
+		index("v2_workspaces_task_id_idx").on(table.taskId),
+		uniqueIndex("v2_workspaces_one_main_per_host")
+			.on(table.projectId, table.hostId)
+			.where(sql`${table.type} = 'main'`),
 	],
 );
 
@@ -683,28 +697,33 @@ export const chatSessions = pgTable(
 export type InsertChatSession = typeof chatSessions.$inferInsert;
 export type SelectChatSession = typeof chatSessions.$inferSelect;
 
-export const sessionHosts = pgTable(
-	"session_hosts",
+export const chatAttachments = pgTable(
+	"chat_attachments",
 	{
 		id: uuid().primaryKey().defaultRandom(),
-		sessionId: uuid("session_id")
+		chatSessionId: uuid("chat_session_id")
 			.notNull()
 			.references(() => chatSessions.id, { onDelete: "cascade" }),
+		createdBy: uuid("created_by")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
 		organizationId: uuid("organization_id")
 			.notNull()
 			.references(() => organizations.id, { onDelete: "cascade" }),
-		deviceId: text("device_id").notNull(),
+		blobPathname: text("blob_pathname").notNull(),
+		mediaType: text("media_type").notNull(),
+		filename: text().notNull(),
+		sizeBytes: integer("size_bytes").notNull(),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 	},
 	(table) => [
-		index("session_hosts_session_id_idx").on(table.sessionId),
-		index("session_hosts_org_idx").on(table.organizationId),
-		index("session_hosts_device_id_idx").on(table.deviceId),
+		index("chat_attachments_session_idx").on(table.chatSessionId),
+		index("chat_attachments_created_by_idx").on(table.createdBy),
 	],
 );
 
-export type InsertSessionHost = typeof sessionHosts.$inferInsert;
-export type SelectSessionHost = typeof sessionHosts.$inferSelect;
+export type InsertChatAttachment = typeof chatAttachments.$inferInsert;
+export type SelectChatAttachment = typeof chatAttachments.$inferSelect;
 
 export const automationRunStatus = pgEnum(
 	"automation_run_status",
@@ -715,12 +734,11 @@ export const automationSessionKind = pgEnum(
 	"automation_session_kind",
 	automationSessionKindValues,
 );
+export const automationPromptSource = pgEnum(
+	"automation_prompt_source",
+	automationPromptSourceValues,
+);
 
-/**
- * Scheduled automation definition. Each automation describes a prompt that
- * should fire on a cron-like recurrence against a target host + workspace
- * (or a freshly allocated workspace per run).
- */
 export const automations = pgTable(
 	"automations",
 	{
@@ -735,37 +753,23 @@ export const automations = pgTable(
 		name: text().notNull(),
 		prompt: text().notNull(),
 
-		/**
-		 * Full resolved agent config snapshotted at create time. Lets the cloud
-		 * dispatcher build the exact same AgentLaunchRequest the user saw —
-		 * including user customizations (overridden command, model, etc.) that
-		 * live only in the desktop's local settings. Treat as frozen at create
-		 * time; updating the user's preset later does not retroactively change
-		 * existing automations. The preset id is `agentConfig.id`.
-		 */
 		agentConfig: jsonb("agent_config").$type<ResolvedAgentConfig>().notNull(),
 
-		/** Target host (v2_hosts.id). Null = owner's most-recently-online host at dispatch. */
-		targetHostId: uuid("target_host_id").references(() => v2Hosts.id, {
-			onDelete: "set null",
-		}),
+		targetHostId: text("target_host_id"),
 
 		v2ProjectId: uuid("v2_project_id")
 			.notNull()
 			.references(() => v2Projects.id, { onDelete: "cascade" }),
 		v2WorkspaceId: uuid("v2_workspace_id"),
 
-		/** RFC 5545 RRULE body (without DTSTART header — stored separately). */
 		rrule: text().notNull(),
 		dtstart: timestamp("dtstart", { withTimezone: true }).notNull(),
 		timezone: text().notNull(),
 
 		enabled: boolean().notNull().default(true),
 
-		/** MCP scope. v1: empty = Superset MCP only. */
 		mcpScope: jsonb("mcp_scope").$type<string[]>().notNull().default([]),
 
-		/** Materialized next occurrence. Dispatcher hot path never re-parses rrule. */
 		nextRunAt: timestamp("next_run_at", { withTimezone: true }).notNull(),
 
 		createdAt: timestamp("created_at", { withTimezone: true })
@@ -786,10 +790,6 @@ export const automations = pgTable(
 export type InsertAutomation = typeof automations.$inferInsert;
 export type SelectAutomation = typeof automations.$inferSelect;
 
-/**
- * One row per scheduled dispatch attempt. Idempotent on
- * (automation_id, scheduled_for) so Vercel Cron double-deliveries are absorbed.
- */
 export const automationRuns = pgTable(
 	"automation_runs",
 	{
@@ -801,26 +801,20 @@ export const automationRuns = pgTable(
 			.notNull()
 			.references(() => organizations.id, { onDelete: "cascade" }),
 
-		/** Snapshot of automations.name at dispatch time — preserves what the run
-		 *  was called even if the automation is renamed later. */
 		title: text().notNull(),
 
-		/** Minute-bucketed scheduled fire time. */
 		scheduledFor: timestamp("scheduled_for", { withTimezone: true }).notNull(),
 
-		hostId: uuid("host_id").references(() => v2Hosts.id, {
-			onDelete: "set null",
-		}),
+		hostId: text("host_id"),
 		v2WorkspaceId: uuid("v2_workspace_id"),
 
-		/** null until the run reaches "dispatched". */
 		sessionKind: automationSessionKind("session_kind"),
 		chatSessionId: uuid("chat_session_id").references(() => chatSessions.id, {
 			onDelete: "set null",
 		}),
 		terminalSessionId: text("terminal_session_id"),
 
-		status: automationRunStatus().notNull().default("pending"),
+		status: automationRunStatus().notNull(),
 		error: text(),
 		dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
 
@@ -838,3 +832,73 @@ export const automationRuns = pgTable(
 
 export type InsertAutomationRun = typeof automationRuns.$inferInsert;
 export type SelectAutomationRun = typeof automationRuns.$inferSelect;
+
+export const automationPromptVersions = pgTable(
+	"automation_prompt_versions",
+	{
+		id: uuid().primaryKey().defaultRandom(),
+		automationId: uuid("automation_id")
+			.notNull()
+			.references(() => automations.id, { onDelete: "cascade" }),
+		authorUserId: uuid("author_user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		windowBucket: integer("window_bucket").notNull(),
+
+		content: text().notNull(),
+		contentHash: text("content_hash").notNull(),
+		source: automationPromptSource().notNull(),
+		restoredFromVersionId: uuid("restored_from_version_id"),
+
+		startedAt: timestamp("started_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date()),
+	},
+	(t) => [
+		uniqueIndex("automation_prompt_versions_bucket_uniq")
+			.on(t.automationId, t.authorUserId, t.windowBucket)
+			.where(sql`${t.source} <> 'restore'`),
+		index("automation_prompt_versions_automation_idx").on(
+			t.automationId,
+			t.updatedAt,
+		),
+		foreignKey({
+			columns: [t.restoredFromVersionId],
+			foreignColumns: [t.id],
+			name: "automation_prompt_versions_restored_from_version_id_fk",
+		}).onDelete("set null"),
+	],
+);
+
+export type InsertAutomationPromptVersion =
+	typeof automationPromptVersions.$inferInsert;
+export type SelectAutomationPromptVersion =
+	typeof automationPromptVersions.$inferSelect;
+
+export const submittedPrompts = pgTable(
+	"submitted_prompts",
+	{
+		id: uuid().primaryKey().defaultRandom(),
+		userId: uuid("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		organizationId: uuid("organization_id").references(() => organizations.id, {
+			onDelete: "set null",
+		}),
+		promptText: text("prompt_text").notNull(),
+		submitterName: text("submitter_name"),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+	},
+	(table) => [
+		index("submitted_prompts_user_id_idx").on(table.userId),
+		index("submitted_prompts_organization_id_idx").on(table.organizationId),
+		index("submitted_prompts_created_at_idx").on(table.createdAt),
+	],
+);
+
+export type InsertSubmittedPrompt = typeof submittedPrompts.$inferInsert;
+export type SelectSubmittedPrompt = typeof submittedPrompts.$inferSelect;

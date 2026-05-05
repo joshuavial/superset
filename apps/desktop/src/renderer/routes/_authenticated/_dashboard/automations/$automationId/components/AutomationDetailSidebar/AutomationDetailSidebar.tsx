@@ -2,14 +2,13 @@ import type {
 	SelectAutomation,
 	SelectAutomationRun,
 } from "@superset/db/schema";
+import { formatDateTimeInTimezone } from "@superset/shared/rrule";
 import { cn } from "@superset/ui/utils";
 import { useMutation } from "@tanstack/react-query";
-import { format } from "date-fns";
 import { useEnabledAgents } from "renderer/hooks/useEnabledAgents";
 import { apiTrpcClient } from "renderer/lib/api-trpc-client";
 import { DevicePicker } from "renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/components/DevicePicker";
 import { useWorkspaceHostOptions } from "renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/components/DevicePicker/hooks/useWorkspaceHostOptions/useWorkspaceHostOptions";
-import type { WorkspaceHostTarget } from "renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/components/DevicePicker/types";
 import { AgentPicker } from "../../../components/AgentPicker";
 import { ProjectPicker } from "../../../components/ProjectPicker";
 import { SchedulePicker } from "../../../components/SchedulePicker";
@@ -37,10 +36,7 @@ export function AutomationDetailSidebar({
 		(p) => p.id === automation.v2ProjectId,
 	);
 
-	const hostTarget: WorkspaceHostTarget =
-		automation.targetHostId && automation.targetHostId !== localHostId
-			? { kind: "host", hostId: automation.targetHostId }
-			: { kind: "local" };
+	const hostId = automation.targetHostId ?? localHostId ?? null;
 
 	const updateMutation = useMutation({
 		mutationFn: (
@@ -81,13 +77,20 @@ export function AutomationDetailSidebar({
 						label="Next run"
 						value={
 							automation.enabled && automation.nextRunAt
-								? format(new Date(automation.nextRunAt), "MMM d, h:mm a")
+								? formatDateTimeInTimezone(
+										new Date(automation.nextRunAt),
+										automation.timezone,
+									)
 								: "—"
 						}
 					/>
 					<Row
 						label="Last ran"
-						value={lastRunAt ? format(lastRunAt, "MMM d, h:mm a") : "—"}
+						value={
+							lastRunAt
+								? formatDateTimeInTimezone(lastRunAt, automation.timezone)
+								: "—"
+						}
 					/>
 				</Section>
 
@@ -97,12 +100,8 @@ export function AutomationDetailSidebar({
 						value={
 							<DevicePicker
 								className="-mr-4"
-								hostTarget={hostTarget}
-								onSelectHostTarget={(target) => {
-									const nextHostId =
-										target.kind === "host"
-											? target.hostId
-											: (localHostId ?? null);
+								hostId={hostId}
+								onSelectHostId={(nextHostId) => {
 									updateMutation.mutate({ targetHostId: nextHostId });
 								}}
 							/>

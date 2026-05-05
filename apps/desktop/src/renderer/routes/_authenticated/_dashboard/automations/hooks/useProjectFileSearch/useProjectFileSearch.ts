@@ -1,25 +1,18 @@
 import { useCallback } from "react";
 import type { FileMentionSearchFn } from "renderer/components/MarkdownEditor/components/FileMention";
-import { env } from "renderer/env.renderer";
+import { useHostUrl } from "renderer/hooks/host-service/useHostTargetUrl";
 import { getHostServiceClientByUrl } from "renderer/lib/host-service-client";
-import type { WorkspaceHostTarget } from "renderer/routes/_authenticated/components/DashboardNewWorkspaceModal/components/DashboardNewWorkspaceForm/components/DevicePicker/types";
-import { useLocalHostService } from "renderer/routes/_authenticated/providers/LocalHostServiceProvider";
 
 const SEARCH_LIMIT = 15;
 
 export function useProjectFileSearch({
-	hostTarget,
+	hostId,
 	projectId,
 }: {
-	hostTarget: WorkspaceHostTarget;
+	hostId: string | null;
 	projectId: string | null;
 }): FileMentionSearchFn | undefined {
-	const { activeHostUrl } = useLocalHostService();
-
-	const hostUrl =
-		hostTarget.kind === "local"
-			? activeHostUrl
-			: `${env.RELAY_URL}/hosts/${hostTarget.hostId}`;
+	const hostUrl = useHostUrl(hostId);
 
 	return useCallback<FileMentionSearchFn>(
 		async (query) => {

@@ -11,7 +11,7 @@ import { useIsDarkTheme } from "renderer/assets/app-icons/preset-icons";
 import { electronTrpc } from "renderer/lib/electron-trpc";
 import { usePresets } from "renderer/react-query/presets";
 import type { PresetColumnKey } from "renderer/routes/_authenticated/settings/presets/types";
-import { PresetEditorSheet } from "./components/PresetEditorSheet";
+import { PresetEditorDialog } from "./components/PresetEditorDialog";
 import { PresetsTable } from "./components/PresetsTable";
 import { QuickAddPresets } from "./components/QuickAddPresets";
 import {
@@ -312,11 +312,11 @@ export function PresetsSection({
 		[setPresetAutoApply],
 	);
 
-	const handleTogglePin = useCallback(
-		(presetId: string, pinned: boolean) => {
+	const handleToggleVisibility = useCallback(
+		(presetId: string, visible: boolean) => {
 			updatePreset.mutate({
 				id: presetId,
-				patch: { pinnedToBar: pinned },
+				patch: { pinnedToBar: visible },
 			});
 		},
 		[updatePreset],
@@ -485,7 +485,7 @@ export function PresetsSection({
 						onEdit={setEditingPreset}
 						onLocalReorder={handleLocalReorder}
 						onPersistReorder={handlePersistReorder}
-						onTogglePin={handleTogglePin}
+						onToggleVisibility={handleToggleVisibility}
 					/>
 					<p className="text-xs text-muted-foreground">
 						Click a preset row to edit details.
@@ -493,7 +493,7 @@ export function PresetsSection({
 				</>
 			)}
 
-			<PresetEditorSheet
+			<PresetEditorDialog
 				preset={editingPreset}
 				projects={projectOptions}
 				open={!!editingPreset}

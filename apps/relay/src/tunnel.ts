@@ -2,7 +2,7 @@ import { createApiClient } from "./api-client";
 import type { TunnelHttpResponse, TunnelRequest } from "./types";
 
 type WsSocket = {
-	send: (data: string) => void;
+	send: (data: string | ArrayBuffer | Uint8Array<ArrayBuffer>) => void;
 	readyState: number;
 	close: (code?: number, reason?: string) => void;
 };
@@ -62,7 +62,7 @@ export class TunnelManager {
 		}, PING_INTERVAL_MS);
 
 		void createApiClient(token)
-			.device.setHostOnline.mutate({ hostId, isOnline: true })
+			.host.setOnline.mutate({ hostId, isOnline: true })
 			.catch(() => {});
 		console.log(`[relay] tunnel registered: ${hostId}`);
 	}
@@ -83,7 +83,7 @@ export class TunnelManager {
 		}
 
 		void createApiClient(tunnel.token)
-			.device.setHostOnline.mutate({ hostId, isOnline: false })
+			.host.setOnline.mutate({ hostId, isOnline: false })
 			.catch(() => {});
 		this.tunnels.delete(hostId);
 		console.log(`[relay] tunnel unregistered: ${hostId}`);
@@ -173,8 +173,15 @@ export class TunnelManager {
 				pending.resolve(msg as unknown as TunnelHttpResponse);
 			}
 		} else if (msg.type === "ws:frame") {
+			if (typeof msg.data !== "string") return;
 			const clientWs = tunnel.activeChannels.get(msg.id as string);
-			if (clientWs?.readyState === 1) clientWs.send(msg.data as string);
+			if (clientWs?.readyState === 1) {
+				if (msg.encoding === "base64") {
+					clientWs.send(Buffer.from(msg.data, "base64"));
+				} else {
+					clientWs.send(msg.data);
+				}
+			}
 		} else if (msg.type === "ws:close") {
 			const clientWs = tunnel.activeChannels.get(msg.id as string);
 			if (clientWs) {

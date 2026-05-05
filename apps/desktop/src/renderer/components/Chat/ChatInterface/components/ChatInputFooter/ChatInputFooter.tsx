@@ -1,3 +1,4 @@
+import { chatServiceTrpc } from "@superset/chat/client";
 import {
 	PromptInput,
 	PromptInputAttachment,
@@ -49,6 +50,7 @@ interface ChatInputFooterProps {
 	pendingQuestion?: {
 		questionId: string;
 		question: string;
+		description?: string;
 		options?: { label: string; description?: string }[];
 	} | null;
 	isQuestionSubmitting?: boolean;
@@ -108,6 +110,34 @@ export function ChatInputFooter({
 	const removeLinkedIssue = useCallback((slug: string) => {
 		setLinkedIssues((prev) => prev.filter((issue) => issue.slug !== slug));
 	}, []);
+
+	const trpcUtils = chatServiceTrpc.useUtils();
+	const searchFiles = useCallback(
+		async (query: string) => {
+			const results = await trpcUtils.workspace.searchFiles.fetch({
+				rootPath: cwd,
+				query,
+				includeHidden: false,
+				limit: 20,
+			});
+			return results.map((r) => ({
+				id: r.id,
+				name: r.name,
+				relativePath: r.relativePath,
+			}));
+		},
+		[trpcUtils, cwd],
+	);
+	const previewSlashCommand = useCallback(
+		async (text: string) => {
+			const result = await trpcUtils.workspace.previewSlashCommand.fetch({
+				cwd,
+				text,
+			});
+			return result ?? null;
+		},
+		[trpcUtils, cwd],
+	);
 
 	const handleSend = useCallback(
 		(message: PromptInputMessage) => {
@@ -176,6 +206,8 @@ export function ChatInputFooter({
 								/>
 								<TiptapPromptEditor
 									cwd={cwd}
+									searchFiles={searchFiles}
+									previewSlashCommand={previewSlashCommand}
 									slashCommands={slashCommands}
 									availableModels={availableModels}
 									placeholder="Ask to make changes, @mention files, run /commands"

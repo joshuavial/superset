@@ -8,12 +8,6 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import type { ITheme } from "@xterm/xterm";
 import { Terminal as XTerm } from "@xterm/xterm";
-import {
-	getBinding,
-	isTerminalReservedEvent,
-	matchesChord,
-	resolveHotkeyFromEvent,
-} from "renderer/hotkeys";
 import type { DetectedLink } from "renderer/lib/terminal/links";
 import { TerminalLinkManager } from "renderer/lib/terminal/terminal-link-manager";
 import { electronTrpcClient as trpcClient } from "renderer/lib/trpc-client";
@@ -23,10 +17,6 @@ import {
 	DEFAULT_THEME_ID,
 	getTerminalColors,
 } from "shared/themes";
-import {
-	shouldBubbleClipboardShortcut,
-	shouldSelectAllShortcut,
-} from "./clipboardShortcuts";
 import { TERMINAL_OPTIONS } from "./config";
 import { suppressQueryResponses } from "./suppressQueryResponses";
 
@@ -66,11 +56,6 @@ export function getDefaultTerminalBg(): string {
 	return getDefaultTerminalTheme().background ?? "#151110";
 }
 
-/**
- * Load GPU-accelerated renderer with automatic fallback.
- * Tries WebGL first, falls back to DOM if WebGL fails.
- * This follows VS Code's approach: WebGL → DOM (canvas addon removed in xterm.js 6.0).
- */
 // Once WebGL fails, skip it for all subsequent terminals (VS Code pattern).
 let suggestedRendererType: "webgl" | "dom" | undefined;
 
@@ -139,7 +124,7 @@ export function createTerminalInWrapper(options: CreateTerminalOptions = {}): {
 		// Ligatures not supported by current font
 	}
 
-	// Defer WebGL to rAF — same pattern as v2 terminal-addons.ts.
+	// Defer WebGL to rAF to avoid racing xterm's post-open viewport sync.
 	const rafId = requestAnimationFrame(() => {
 		if (disposed || suggestedRendererType === "dom") return;
 
@@ -190,7 +175,9 @@ export function createTerminalInWrapper(options: CreateTerminalOptions = {}): {
 					);
 				});
 		},
-		onUrlClick: (_event, uri) => {
+		onUrlClick: (event, uri) => {
+			if (!event.metaKey && !event.ctrlKey) return;
+			event.preventDefault();
 			const handler = urlClickRef?.current;
 			if (handler) {
 				handler(uri);
@@ -227,14 +214,6 @@ export function createTerminalInWrapper(options: CreateTerminalOptions = {}): {
 			webglAddon = null;
 		},
 	};
-}
-
-export interface KeyboardHandlerOptions {
-	/** Callback for Shift+Enter (sends ESC+CR to avoid \ appearing in Claude Code while keeping line continuation behavior) */
-	onShiftEnter?: () => void;
-	/** Callback for the configured clear terminal shortcut */
-	onClear?: () => void;
-	onWrite?: (data: string) => void;
 }
 
 /**
@@ -278,195 +257,6 @@ export function setupCopyHandler(xterm: XTerm): () => void {
 
 	return () => {
 		element.removeEventListener("copy", handleCopy);
-	};
-}
-
-/**
- * Setup keyboard handling for xterm including:
- * - Shortcut forwarding: App hotkeys bubble to document where useAppHotkey listens
- * - Shift+Enter: Sends ESC+CR sequence (to avoid \ appearing in Claude Code while keeping line continuation behavior)
- * - Clear terminal: Uses the configured clear shortcut
- *
- * Returns a cleanup function to remove the handler.
- */
-export function setupKeyboardHandler(
-	xterm: XTerm,
-	options: KeyboardHandlerOptions = {},
-): () => void {
-	const platform =
-		typeof navigator !== "undefined" ? navigator.platform.toLowerCase() : "";
-	const isMac = platform.includes("mac");
-	const isWindows = platform.includes("win");
-
-	const handler = (event: KeyboardEvent): boolean => {
-		const isShiftEnter =
-			event.key === "Enter" &&
-			event.shiftKey &&
-			!event.metaKey &&
-			!event.ctrlKey &&
-			!event.altKey;
-
-		if (isShiftEnter) {
-			if (event.type === "keydown" && options.onShiftEnter) {
-				event.preventDefault();
-				options.onShiftEnter();
-			}
-			return false;
-		}
-
-		const isCmdBackspace =
-			event.key === "Backspace" &&
-			event.metaKey &&
-			!event.ctrlKey &&
-			!event.altKey &&
-			!event.shiftKey;
-
-		if (isCmdBackspace) {
-			if (event.type === "keydown" && options.onWrite) {
-				event.preventDefault();
-				options.onWrite("\x15\x1b[D"); // Ctrl+U + left arrow
-			}
-			return false;
-		}
-
-		// Cmd+Left: Move cursor to beginning of line (sends Ctrl+A)
-		const isCmdLeft =
-			event.key === "ArrowLeft" &&
-			event.metaKey &&
-			!event.ctrlKey &&
-			!event.altKey &&
-			!event.shiftKey;
-
-		if (isCmdLeft) {
-			if (event.type === "keydown" && options.onWrite) {
-				event.preventDefault();
-				options.onWrite("\x01"); // Ctrl+A - beginning of line
-			}
-			return false;
-		}
-
-		// Cmd+Right: Move cursor to end of line (sends Ctrl+E)
-		const isCmdRight =
-			event.key === "ArrowRight" &&
-			event.metaKey &&
-			!event.ctrlKey &&
-			!event.altKey &&
-			!event.shiftKey;
-
-		if (isCmdRight) {
-			if (event.type === "keydown" && options.onWrite) {
-				event.preventDefault();
-				options.onWrite("\x05"); // Ctrl+E - end of line
-			}
-			return false;
-		}
-
-		// Option+Left/Right (macOS): word navigation (Meta+B / Meta+F)
-		const isOptionLeft =
-			event.key === "ArrowLeft" &&
-			event.altKey &&
-			isMac &&
-			!event.metaKey &&
-			!event.ctrlKey &&
-			!event.shiftKey;
-
-		if (isOptionLeft) {
-			if (event.type === "keydown" && options.onWrite) {
-				options.onWrite("\x1bb"); // Meta+B - backward word
-			}
-			return false;
-		}
-
-		// Option+Right: Move cursor forward by word (Meta+F)
-		const isOptionRight =
-			event.key === "ArrowRight" &&
-			event.altKey &&
-			isMac &&
-			!event.metaKey &&
-			!event.ctrlKey &&
-			!event.shiftKey;
-
-		if (isOptionRight) {
-			if (event.type === "keydown" && options.onWrite) {
-				options.onWrite("\x1bf"); // Meta+F - forward word
-			}
-			return false;
-		}
-
-		// Ctrl+Left/Right (Windows): word navigation (Meta+B / Meta+F)
-		const isCtrlLeft =
-			event.key === "ArrowLeft" &&
-			event.ctrlKey &&
-			isWindows &&
-			!event.metaKey &&
-			!event.altKey &&
-			!event.shiftKey;
-
-		if (isCtrlLeft) {
-			if (event.type === "keydown" && options.onWrite) {
-				options.onWrite("\x1bb"); // Meta+B - backward word
-			}
-			return false;
-		}
-
-		const isCtrlRight =
-			event.key === "ArrowRight" &&
-			event.ctrlKey &&
-			isWindows &&
-			!event.metaKey &&
-			!event.altKey &&
-			!event.shiftKey;
-
-		if (isCtrlRight) {
-			if (event.type === "keydown" && options.onWrite) {
-				options.onWrite("\x1bf"); // Meta+F - forward word
-			}
-			return false;
-		}
-
-		if (shouldSelectAllShortcut(event, isMac)) {
-			if (event.type === "keydown") {
-				event.preventDefault();
-				xterm.selectAll();
-			}
-			return false;
-		}
-
-		// Mirror VS Code terminal clipboard bindings so host copy/paste happens
-		// before kitty CSI-u handling in xterm consumes the command chord.
-		if (
-			shouldBubbleClipboardShortcut(event, {
-				isMac,
-				isWindows,
-				hasSelection: xterm.hasSelection(),
-			})
-		) {
-			return false;
-		}
-
-		// Terminal-reserved chords (ctrl+c/d/z/s/q) always go to xterm
-		if (isTerminalReservedEvent(event)) return true;
-
-		// CLEAR_TERMINAL is handled here (xterm needs to call onClear)
-		const clearKeys = getBinding("CLEAR_TERMINAL");
-		if (clearKeys && matchesChord(event, clearKeys)) {
-			if (event.type === "keydown" && options.onClear) {
-				options.onClear();
-			}
-			return false;
-		}
-
-		// Only bubble chords registered as app hotkeys; everything else reaches the PTY.
-		// Mirrors v2 terminal-runtime.ts:21 (VSCode terminalInstance pattern).
-		if (resolveHotkeyFromEvent(event) !== null) return false;
-
-		return true;
-	};
-
-	xterm.attachCustomKeyEventHandler(handler);
-
-	return () => {
-		xterm.attachCustomKeyEventHandler(() => true);
 	};
 }
 
